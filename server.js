@@ -65,7 +65,7 @@ app.post('/api/appointments/reserve', async (req, res) => {
       try {
         const preference = new Preference(client);
 
-        const clientFrontendUrl = process.env.CLIENT_URL || 'http://localhost:5173';
+        const clientUrl = process.env.CLIENT_URL || 'https://agenda-estetica-fronend-xunf.vercel.app';
 
         // Objeto de la preferencia de pago
         const preferenceBody = {
