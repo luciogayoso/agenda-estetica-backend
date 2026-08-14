@@ -133,7 +133,7 @@ app.post('/api/appointments/reserve', async (req, res) => {
   try {
     const { client_name, client_phone, service_id, appointment_date } = req.body
 
-    // Buscar el servicio en Supabase en lugar de un array local
+    // Buscar el servicio en Supabase
     const { data: service, error: serviceError } = await supabase
       .from('services')
       .select('*')
@@ -176,9 +176,8 @@ app.post('/api/appointments/reserve', async (req, res) => {
       try {
         const preference = new Preference(client)
 
-        const clientUrl =
-          process.env.CLIENT_URL ||
-          'https://agenda-estetica-fronend-xunf.vercel.app'
+        const clientUrl = process.env.CLIENT_URL || 'https://agenda-estetica-fronend-xunf.vercel.app'
+        const backendUrl = process.env.BACKEND_URL || 'https://agenda-estetica-backend.onrender.com'
 
         const preferenceBody = {
           items: [
@@ -193,18 +192,11 @@ app.post('/api/appointments/reserve', async (req, res) => {
           external_reference: newAppointment.id.toString(),
           back_urls: {
             success: `${clientUrl}/reserva-exito?appointment_id=${newAppointment.id}`,
-            failure: `${clientUrl}/reserva-exito`,
-            pending: `${clientUrl}/reserva-exito`
+            failure: `${clientUrl}/reserva-exito?appointment_id=${newAppointment.id}&status=failed`,
+            pending: `${clientUrl}/reserva-exito?appointment_id=${newAppointment.id}&status=pending`
           },
           auto_return: 'approved',
-          notification_url: 'https://agenda-estetica-backend.onrender.com/api/webhooks/mercadopago'
-        }
-
-        if (
-          process.env.BACKEND_URL &&
-          !process.env.BACKEND_URL.includes('localhost')
-        ) {
-          preferenceBody.notification_url = `${process.env.BACKEND_URL}/api/webhooks/mercadopago`
+          notification_url: `${backendUrl}/api/webhooks/mercadopago`
         }
 
         const result = await preference.create({ body: preferenceBody })
@@ -249,7 +241,7 @@ app.get('/api/appointments', async (req, res) => {
   }
 })
 
-// PATCH: Cambiar estado del turno manualmente desde el Admin (ej. marcar pagado/confirmado)
+// PATCH: Cambiar estado del turno manualmente desde el Admin
 app.patch('/api/appointments/:id/status', async (req, res) => {
   try {
     const { id } = req.params
@@ -274,7 +266,7 @@ app.patch('/api/appointments/:id/status', async (req, res) => {
   }
 })
 
-// POST: Confirmación manual por ID (Respaldo desde la pantalla de éxito)
+// POST: Confirmación manual por ID (Respaldo desde el frontend al regresar del pago)
 app.post('/api/appointments/confirm', async (req, res) => {
   try {
     const { appointment_id } = req.body
@@ -300,19 +292,19 @@ app.post('/api/appointments/confirm', async (req, res) => {
 })
 
 // =========================================================================
-// 3. WEBHOOK DE MERCADO PAGO
+// 3. WEBHOOK DE MERCADO PAGO (PROCESAMIENTO Y NOTIFICACIÓN AUTOMÁTICA)
 // =========================================================================
 
 app.post('/api/webhooks/mercadopago', async (req, res) => {
+  // 1. Responder inmediatamente a Mercado Pago con HTTP 200 OK
+  res.status(200).send('OK')
+
   try {
-    const type = req.body?.type || req.query?.type || req.query?.topic
+    // Mercado Pago envía datos en req.body o en req.query según el tipo de evento
+    const topic = req.body?.type || req.query?.type || req.query?.topic || req.body?.action
     const paymentId = req.body?.data?.id || req.query?.id || req.query?.['data.id']
 
-    if (
-      (type === 'payment' || type === 'payment.created') &&
-      paymentId &&
-      mpAccessToken
-    ) {
+    if ((topic === 'payment' || topic === 'payment.created' || topic === 'payment.updated') && paymentId && mpAccessToken) {
       const payment = new Payment(client)
       const paymentInfo = await payment.get({ id: paymentId })
 
@@ -340,15 +332,12 @@ app.post('/api/webhooks/mercadopago', async (req, res) => {
         console.log(`ℹ️ Pago #${paymentId} procesado con estado: ${paymentInfo.status}`)
       }
     }
-
-    res.sendStatus(200)
   } catch (error) {
     console.error('❌ Error procesando Webhook de Mercado Pago:', error)
-    res.sendStatus(500)
   }
 })
 
 // Iniciar servidor
 app.listen(PORT, () => {
-  console.log(`🚀 Servidor backend escuchando en http://localhost:${PORT}`)
+  console.log(`🚀 Servidor backend escuchando en puerto ${PORT}`)
 })
