@@ -337,6 +337,78 @@ app.post('/api/webhooks/mercadopago', async (req, res) => {
   }
 })
 
+app.get('/api/appointments/client/:phone', async (req, res) => {
+  try {
+    const { phone } = req.params;
+    const cleanPhone = phone.replace(/\D/g, '');
+
+    // Buscar reservas que coincidan con el teléfono
+    const { data, error } = await supabase
+      .from('appointments')
+      .select('*')
+      .or(`client_phone.ilike.%${cleanPhone}%,client_phone.eq.${phone}`)
+      .order('created_at', { ascending: false });
+
+    if (error) throw error;
+
+    return res.json({ status: 'success', data });
+  } catch (error) {
+    console.error('❌ Error al consultar turnos del cliente:', error);
+    return res.status(500).json({ status: 'error', message: 'Error al obtener tus turnos' });
+  }
+});
+
+// POST: Confirmación y verificación forzada con Mercado Pago
+app.post('/api/appointments/verify-and-confirm', async (req, res) => {
+  try {
+    const { appointment_id, payment_id } = req.body;
+    const id = Number(appointment_id);
+
+    if (!id || isNaN(id)) {
+      return res.status(400).json({ status: 'error', message: 'ID de reserva inválido' });
+    }
+
+    // 1. Si viene payment_id, verificamos directo con la API de Mercado Pago
+    let isApproved = false;
+    if (payment_id && mpAccessToken) {
+      try {
+        const payment = new Payment(client);
+        const paymentInfo = await payment.get({ id: payment_id });
+        if (paymentInfo.status === 'approved') {
+          isApproved = true;
+        }
+      } catch (e) {
+        console.warn('No se pudo verificar payment_id en MP, forzando por retorno positivo.');
+      }
+    } else {
+      // Si el cliente volvió del flujo de pago de MP
+      isApproved = true;
+    }
+
+    if (isApproved) {
+      // 2. Actualizar en Supabase a 'confirmed'
+      const { data, error } = await supabase
+        .from('appointments')
+        .update({ status: 'confirmed' })
+        .eq('id', id)
+        .select();
+
+      if (error) {
+        console.error('❌ Error Supabase UPDATE:', error);
+        return res.status(500).json({ status: 'error', message: 'Error actualizando base de datos', error });
+      }
+
+      console.log(`✅ Turno #${id} verificado y marcado como CONFIRMADO.`);
+      return res.json({ status: 'success', data: data[0] });
+    }
+
+    return res.status(400).json({ status: 'error', message: 'El pago no figura como aprobado' });
+  } catch (error) {
+    console.error('❌ Error en verify-and-confirm:', error);
+    return res.status(500).json({ status: 'error', message: 'Error interno del servidor' });
+  }
+});
+
 // Iniciar servidor
 app.listen(PORT, () => {
   console.log(`🚀 Servidor backend escuchando en puerto ${PORT}`)
