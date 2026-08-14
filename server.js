@@ -41,7 +41,7 @@ app.post('/api/appointments/reserve', async (req, res) => {
     }
 
     // Guardar reserva inicial en Supabase
-    const { data: appointment, error: dbError } = await supabase
+    const { data: newAppointment, error: dbError } = await supabase
       .from('appointments')
       .insert([
         {
