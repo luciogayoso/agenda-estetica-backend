@@ -79,12 +79,12 @@ app.post('/api/appointments/reserve', async (req, res) => {
             }
           ],
           external_reference: String(appointment.id),
-          backUrls: {
-            success: 'http://localhost:5173/reserva-exito',
-            failure: 'http://localhost:5173/reserva-error',
-            pending: 'http://localhost:5173/reserva-pendiente'
+          back_urls: {
+            success: `${clientUrl}/reserva-exito`,
+            failure: `${clientUrl}/reserva-exito`,
+            pending: `${clientUrl}/reserva-exito`,
           },
-          autoReturn: 'approved'
+          auto_return: 'approved',
         };
 
         // Mercado Pago no acepta 'localhost' en notification_url
