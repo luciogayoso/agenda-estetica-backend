@@ -40,7 +40,7 @@ app.post('/api/appointments/reserve', async (req, res) => {
         .json({ status: 'error', message: 'Servicio no encontrado' })
     }
 
-    // Guardar reserva inicial en Supabase
+    // Guardar reserva inicial en Supabase (validación estricta)
     const { data: newAppointment, error: dbError } = await supabase
       .from('appointments')
       .insert([
@@ -56,12 +56,15 @@ app.post('/api/appointments/reserve', async (req, res) => {
       .select()
       .single()
 
-    if (dbError) {
-      console.error('Error al guardar en Supabase:', dbError)
-      return res
-        .status(500)
-        .json({ status: 'error', message: 'Error al guardar la reserva' })
+    if (dbError || !newAppointment) {
+      console.error('❌ Error al guardar en Supabase:', dbError)
+      return res.status(500).json({
+        status: 'error',
+        message: 'No se pudo registrar la pre-reserva en la base de datos'
+      })
     }
+
+    console.log(`📌 Pre-reserva creada exitosamente con ID #${newAppointment.id}`)
 
     let paymentUrl = ''
 
