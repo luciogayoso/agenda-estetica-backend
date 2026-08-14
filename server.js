@@ -122,7 +122,7 @@ app.post('/api/appointments/reserve', async (req, res) => {
 
     return res.json({
       status: 'success',
-      appointment_id: appointment.id,
+      appointment_id: newAppointment.id,
       init_point: paymentUrl
     })
   } catch (error) {
