@@ -21,26 +21,130 @@ const client = new MercadoPagoConfig({ accessToken: mpAccessToken })
 app.use(cors())
 app.use(express.json())
 
-const SERVICES = [
-  { id: 1, name: 'Perfilado de Cejas & Henna', deposit_amount: 3000 },
-  { id: 2, name: 'Lifting de Pestañas + Nutrición', deposit_amount: 4000 },
-  { id: 3, name: 'Limpieza Facial Profunda Glow', deposit_amount: 5000 },
-  { id: 4, name: 'Soft Gel Nails Art', deposit_amount: 4000 }
-]
+// =========================================================================
+// 1. RUTAS DE SERVICIOS (CRUD DINÁMICO EN SUPABASE)
+// =========================================================================
 
-// 1. Ruta para reservar e iniciar pago
+// GET: Obtener todos los servicios desde Supabase
+app.get('/api/services', async (req, res) => {
+  try {
+    const { data: services, error } = await supabase
+      .from('services')
+      .select('id, name, duration_minutes, price, deposit_amount, description, icon')
+      .order('id', { ascending: true })
+
+    if (error) {
+      console.error('❌ Error de Supabase al consultar servicios:', error)
+      throw error
+    }
+
+    return res.json(services)
+  } catch (error) {
+    console.error('Error interno al obtener servicios:', error)
+    return res.status(500).json({ error: 'Error al obtener los servicios' })
+  }
+})
+
+// POST: Crear un nuevo servicio (Panel Administrador)
+app.post('/api/services', async (req, res) => {
+  try {
+    const { name, description, price, deposit_amount, duration_minutes, icon } = req.body
+
+    if (!name || !price || !deposit_amount) {
+      return res.status(400).json({ status: 'error', message: 'Nombre, precio y seña son obligatorios' })
+    }
+
+    const { data, error } = await supabase
+      .from('services')
+      .insert([
+        {
+          name,
+          description: description || '',
+          price: Number(price),
+          deposit_amount: Number(deposit_amount),
+          duration_minutes: Number(duration_minutes) || 60,
+          icon: icon || '✨'
+        }
+      ])
+      .select()
+
+    if (error) throw error
+
+    return res.status(201).json({ status: 'success', data })
+  } catch (error) {
+    console.error('❌ Error al crear servicio:', error)
+    return res.status(500).json({ status: 'error', message: 'No se pudo crear el servicio' })
+  }
+})
+
+// PUT: Actualizar un servicio existente
+app.put('/api/services/:id', async (req, res) => {
+  try {
+    const { id } = req.params
+    const { name, description, price, deposit_amount, duration_minutes, icon } = req.body
+
+    const { data, error } = await supabase
+      .from('services')
+      .update({
+        name,
+        description,
+        price: Number(price),
+        deposit_amount: Number(deposit_amount),
+        duration_minutes: Number(duration_minutes),
+        icon
+      })
+      .eq('id', Number(id))
+      .select()
+
+    if (error) throw error
+
+    return res.json({ status: 'success', data })
+  } catch (error) {
+    console.error('❌ Error al actualizar servicio:', error)
+    return res.status(500).json({ status: 'error', message: 'No se pudo actualizar el servicio' })
+  }
+})
+
+// DELETE: Eliminar un servicio
+app.delete('/api/services/:id', async (req, res) => {
+  try {
+    const { id } = req.params
+
+    const { error } = await supabase
+      .from('services')
+      .delete()
+      .eq('id', Number(id))
+
+    if (error) throw error
+
+    return res.json({ status: 'success', message: 'Servicio eliminado correctamente' })
+  } catch (error) {
+    console.error('❌ Error al eliminar servicio:', error)
+    return res.status(500).json({ status: 'error', message: 'No se pudo eliminar el servicio' })
+  }
+})
+
+// =========================================================================
+// 2. RUTAS DE RESERVAS Y TURNOS
+// =========================================================================
+
+// POST: Crear la reserva en Supabase e iniciar preferencia en Mercado Pago
 app.post('/api/appointments/reserve', async (req, res) => {
   try {
     const { client_name, client_phone, service_id, appointment_date } = req.body
 
-    const service = SERVICES.find(s => s.id === Number(service_id))
-    if (!service) {
-      return res
-        .status(404)
-        .json({ status: 'error', message: 'Servicio no encontrado' })
+    // Buscar el servicio en Supabase en lugar de un array local
+    const { data: service, error: serviceError } = await supabase
+      .from('services')
+      .select('*')
+      .eq('id', Number(service_id))
+      .single()
+
+    if (serviceError || !service) {
+      return res.status(404).json({ status: 'error', message: 'Servicio no encontrado en la base de datos' })
     }
 
-    // Guardar reserva inicial en Supabase (validación estricta)
+    // Registrar la pre-reserva en Supabase
     const { data: newAppointment, error: dbError } = await supabase
       .from('appointments')
       .insert([
@@ -76,7 +180,6 @@ app.post('/api/appointments/reserve', async (req, res) => {
           process.env.CLIENT_URL ||
           'https://agenda-estetica-fronend-xunf.vercel.app'
 
-        // Objeto de la preferencia de pago
         const preferenceBody = {
           items: [
             {
@@ -97,7 +200,6 @@ app.post('/api/appointments/reserve', async (req, res) => {
           notification_url: 'https://agenda-estetica-backend.onrender.com/api/webhooks/mercadopago'
         }
 
-        // Si existe BACKEND_URL en el entorno y no es localhost, sobrescribe notification_url
         if (
           process.env.BACKEND_URL &&
           !process.env.BACKEND_URL.includes('localhost')
@@ -106,7 +208,6 @@ app.post('/api/appointments/reserve', async (req, res) => {
         }
 
         const result = await preference.create({ body: preferenceBody })
-
         paymentUrl = result.init_point || result.sandbox_init_point
       } catch (mpErr) {
         console.error('❌ Error creando la preferencia de Mercado Pago:', mpErr)
@@ -127,33 +228,81 @@ app.post('/api/appointments/reserve', async (req, res) => {
     })
   } catch (error) {
     console.error('Error general al procesar reserva:', error)
-    res
-      .status(500)
-      .json({ status: 'error', message: 'Error interno del servidor' })
+    res.status(500).json({ status: 'error', message: 'Error interno del servidor' })
   }
 })
 
-// Obtener la lista de servicios dinámicos
-app.get('/api/services', async (req, res) => {
+// GET: Obtener todos los turnos para el Admin Dashboard
+app.get('/api/appointments', async (req, res) => {
   try {
-    const { data: services, error } = await supabase
-      .from('services')
-      .select('id, name, duration_minutes, price, deposit_amount, description, icon')
-      .order('id', { ascending: true })
+    const { data, error } = await supabase
+      .from('appointments')
+      .select('*')
+      .order('created_at', { ascending: false })
 
-    if (error) {
-      console.error('Error de Supabase al consultar servicios:', error)
-      throw error
+    if (error) throw error
+
+    res.json({ status: 'success', data })
+  } catch (error) {
+    console.error('❌ Error al consultar Supabase:', error)
+    res.status(500).json({ status: 'error', message: 'Error al obtener las reservas' })
+  }
+})
+
+// PATCH: Cambiar estado del turno manualmente desde el Admin (ej. marcar pagado/confirmado)
+app.patch('/api/appointments/:id/status', async (req, res) => {
+  try {
+    const { id } = req.params
+    const { status } = req.body
+
+    if (!status) {
+      return res.status(400).json({ status: 'error', message: 'El campo status es requerido' })
     }
 
-    return res.json(services)
+    const { data, error } = await supabase
+      .from('appointments')
+      .update({ status })
+      .eq('id', Number(id))
+      .select()
+
+    if (error) throw error
+
+    return res.json({ status: 'success', data })
   } catch (error) {
-    console.error('Error interno al obtener servicios:', error)
-    return res.status(500).json({ error: 'Error al obtener los servicios' })
+    console.error('❌ Error al actualizar estado del turno:', error)
+    return res.status(500).json({ status: 'error', message: 'No se pudo actualizar el estado del turno' })
   }
 })
 
-// 2. Webhook de Mercado Pago para confirmación automática
+// POST: Confirmación manual por ID (Respaldo desde la pantalla de éxito)
+app.post('/api/appointments/confirm', async (req, res) => {
+  try {
+    const { appointment_id } = req.body
+    const id = Number(appointment_id)
+
+    if (!id || isNaN(id)) {
+      return res.status(400).json({ status: 'error', message: 'ID de reserva inválido' })
+    }
+
+    const { data, error } = await supabase
+      .from('appointments')
+      .update({ status: 'confirmed' })
+      .eq('id', id)
+      .select()
+
+    if (error) throw error
+
+    return res.json({ status: 'success', data })
+  } catch (error) {
+    console.error('❌ Error al confirmar reserva manualmente:', error)
+    return res.status(500).json({ status: 'error', message: 'Error interno del servidor' })
+  }
+})
+
+// =========================================================================
+// 3. WEBHOOK DE MERCADO PAGO
+// =========================================================================
+
 app.post('/api/webhooks/mercadopago', async (req, res) => {
   try {
     const type = req.body?.type || req.query?.type || req.query?.topic
@@ -199,50 +348,7 @@ app.post('/api/webhooks/mercadopago', async (req, res) => {
   }
 })
 
-// 3. Confirmación manual por ID (desde el frontend de éxito como respaldo)
-app.post('/api/appointments/confirm', async (req, res) => {
-  try {
-    const { appointment_id } = req.body
-    const id = Number(appointment_id)
-
-    if (!id || isNaN(id)) {
-      return res.status(400).json({ status: 'error', message: 'ID de reserva inválido' })
-    }
-
-    const { data, error } = await supabase
-      .from('appointments')
-      .update({ status: 'confirmed' })
-      .eq('id', id)
-      .select()
-
-    if (error) throw error
-
-    return res.json({ status: 'success', data })
-  } catch (error) {
-    console.error('Error al confirmar reserva manualmente:', error)
-    return res.status(500).json({ status: 'error', message: 'Error interno del servidor' })
-  }
-})
-
-// 4. Obtener todos los turnos para el Admin Dashboard
-app.get('/api/appointments', async (req, res) => {
-  try {
-    const { data, error } = await supabase
-      .from('appointments')
-      .select('*')
-      .order('created_at', { ascending: false })
-
-    if (error) throw error
-
-    res.json({ status: 'success', data })
-  } catch (error) {
-    console.error('Error al consultar Supabase:', error)
-    res
-      .status(500)
-      .json({ status: 'error', message: 'Error al obtener las reservas' })
-  }
-})
-
+// Iniciar servidor
 app.listen(PORT, () => {
   console.log(`🚀 Servidor backend escuchando en http://localhost:${PORT}`)
 })
