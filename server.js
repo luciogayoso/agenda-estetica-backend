@@ -88,13 +88,13 @@ app.post('/api/appointments/reserve', async (req, res) => {
           back_urls: {
             success: `${clientUrl}/reserva-exito?appointment_id=${newAppointment.id}`,
             failure: `${clientUrl}/reserva-exito`,
-            pending: `${clientUrl}/reserva-exito`,
+            pending: `${clientUrl}/reserva-exito`
           },
           auto_return: 'approved',
           notification_url: 'https://agenda-estetica-backend.onrender.com/api/webhooks/mercadopago'
         }
 
-        // Mercado Pago no acepta 'localhost' en notification_url
+        // Si existe BACKEND_URL en el entorno y no es localhost, sobrescribe notification_url
         if (
           process.env.BACKEND_URL &&
           !process.env.BACKEND_URL.includes('localhost')
@@ -104,7 +104,6 @@ app.post('/api/appointments/reserve', async (req, res) => {
 
         const result = await preference.create({ body: preferenceBody })
 
-        // URL para redirigir al checkout
         paymentUrl = result.init_point || result.sandbox_init_point
       } catch (mpErr) {
         console.error('❌ Error creando la preferencia de Mercado Pago:', mpErr)
@@ -115,9 +114,7 @@ app.post('/api/appointments/reserve', async (req, res) => {
         })
       }
     } else {
-      console.warn(
-        '⚠️ MERCADOPAGO_ACCESS_TOKEN no está definido en el archivo .env'
-      )
+      console.warn('⚠️ MERCADOPAGO_ACCESS_TOKEN no está definido')
     }
 
     return res.json({
@@ -133,33 +130,31 @@ app.post('/api/appointments/reserve', async (req, res) => {
   }
 })
 
+// Obtener la lista de servicios dinámicos
 app.get('/api/services', async (req, res) => {
   try {
     const { data: services, error } = await supabase
       .from('services')
       .select('id, name, duration_minutes, price, deposit_amount, description, icon')
-      .order('id', { ascending: true });
+      .order('id', { ascending: true })
 
     if (error) {
-      console.error('Error de Supabase al consultar servicios:', error);
-      throw error;
+      console.error('Error de Supabase al consultar servicios:', error)
+      throw error
     }
 
-    return res.json(services);
+    return res.json(services)
   } catch (error) {
-    console.error('Error interno al obtener servicios:', error);
-    return res.status(500).json({ error: 'Error al obtener los servicios' });
+    console.error('Error interno al obtener servicios:', error)
+    return res.status(500).json({ error: 'Error al obtener los servicios' })
   }
-});
-
+})
 
 // 2. Webhook de Mercado Pago para confirmación automática
 app.post('/api/webhooks/mercadopago', async (req, res) => {
   try {
-    // 🔴 1. Capturar ID y Type tanto de req.body como de req.query
     const type = req.body?.type || req.query?.type || req.query?.topic
-    const paymentId =
-      req.body?.data?.id || req.query?.id || req.query?.['data.id']
+    const paymentId = req.body?.data?.id || req.query?.id || req.query?.['data.id']
 
     if (
       (type === 'payment' || type === 'payment.created') &&
@@ -170,61 +165,63 @@ app.post('/api/webhooks/mercadopago', async (req, res) => {
       const paymentInfo = await payment.get({ id: paymentId })
 
       if (paymentInfo.status === 'approved') {
-        // 🔴 Convertir el external_reference a Número para Supabase (int8)
         const appointmentId = Number(paymentInfo.external_reference)
 
         if (!isNaN(appointmentId)) {
-          const { error } = await supabase
+          const { data, error } = await supabase
             .from('appointments')
             .update({ status: 'confirmed' })
             .eq('id', appointmentId)
+            .select()
 
           if (error) {
-            console.error('Error actualizando estado en Supabase:', error)
+            console.error('❌ Error actualizando estado en Supabase:', error)
+          } else if (!data || data.length === 0) {
+            console.warn(`⚠️ No se encontró la reserva #${appointmentId} en Supabase.`)
           } else {
-            console.log(
-              `✅ Turno ID #${appointmentId} confirmado exitosamente en Supabase.`
-            )
+            console.log(`✅ Turno ID #${appointmentId} confirmado exitosamente en Supabase.`)
           }
+        } else {
+          console.error('❌ external_reference inválido:', paymentInfo.external_reference)
         }
+      } else {
+        console.log(`ℹ️ Pago #${paymentId} procesado con estado: ${paymentInfo.status}`)
       }
     }
 
     res.sendStatus(200)
   } catch (error) {
-    console.error('Error procesando Webhook:', error)
+    console.error('❌ Error procesando Webhook de Mercado Pago:', error)
     res.sendStatus(500)
   }
 })
 
-// 3. Confirmación manual desde la pantalla de éxito
-app.post('/api/appointments/confirm-manual', async (req, res) => {
+// 3. Confirmación manual por ID (desde el frontend de éxito como respaldo)
+app.post('/api/appointments/confirm', async (req, res) => {
   try {
-    const { appointment_id } = req.body;
+    const { appointment_id } = req.body
+    const id = Number(appointment_id)
 
-    if (!appointment_id) {
-      return res.status(400).json({ status: 'error', message: 'Falta el ID del turno' });
+    if (!id || isNaN(id)) {
+      return res.status(400).json({ status: 'error', message: 'ID de reserva inválido' })
     }
 
-    // 🔴 Convertir a Número antes de consultar Supabase
-    const numericId = Number(appointment_id);
-
-    const { error } = await supabase
+    const { data, error } = await supabase
       .from('appointments')
       .update({ status: 'confirmed' })
-      .eq('id', numericId);
+      .eq('id', id)
+      .select()
 
-    if (error) throw error;
+    if (error) throw error
 
-    console.log(`✅ Turno #${numericId} actualizado a 'confirmed' exitosamente.`);
-    return res.json({ status: 'success' });
-  } catch (err) {
-    console.error('Error al confirmar reserva:', err);
-    return res.status(500).json({ status: 'error' });
+    return res.json({ status: 'success', data })
+  } catch (error) {
+    console.error('Error al confirmar reserva manualmente:', error)
+    return res.status(500).json({ status: 'error', message: 'Error interno del servidor' })
   }
-});
+})
 
-// 4. Obtener todos los turnos
+// 4. Obtener todos los turnos para el Admin Dashboard
 app.get('/api/appointments', async (req, res) => {
   try {
     const { data, error } = await supabase
