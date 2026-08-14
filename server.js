@@ -133,6 +133,26 @@ app.post('/api/appointments/reserve', async (req, res) => {
   }
 })
 
+app.get('/api/services', async (req, res) => {
+  try {
+    const { data: services, error } = await supabase
+      .from('services')
+      .select('id, name, duration_minutes, price, deposit_amount, description, icon')
+      .order('id', { ascending: true });
+
+    if (error) {
+      console.error('Error de Supabase al consultar servicios:', error);
+      throw error;
+    }
+
+    return res.json(services);
+  } catch (error) {
+    console.error('Error interno al obtener servicios:', error);
+    return res.status(500).json({ error: 'Error al obtener los servicios' });
+  }
+});
+
+
 // 2. Webhook de Mercado Pago para confirmación automática
 app.post('/api/webhooks/mercadopago', async (req, res) => {
   try {
