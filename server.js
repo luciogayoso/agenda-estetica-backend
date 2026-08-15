@@ -409,6 +409,202 @@ app.post('/api/appointments/verify-and-confirm', async (req, res) => {
   }
 });
 
+// =========================================================================
+// RUTAS DE BLOQUEO DE DÍAS Y HORARIOS
+// =========================================================================
+
+// GET: Consultar todos los bloqueos (para el panel admin y el calendario del cliente)
+app.get('/api/schedules/blocks', async (req, res) => {
+  try {
+    const { data: dates } = await supabase.from('blocked_dates').select('*').order('date', { ascending: true });
+    const { data: slots } = await supabase.from('blocked_slots').select('*').order('id', { ascending: true });
+
+    return res.json({ status: 'success', blockedDates: dates || [], blockedSlots: slots || [] });
+  } catch (error) {
+    console.error('❌ Error obteniendo bloqueos:', error);
+    return res.status(500).json({ status: 'error', message: 'Error interno del servidor' });
+  }
+});
+
+// POST: Bloquear un día completo
+app.post('/api/schedules/blocked-dates', async (req, res) => {
+  try {
+    const { date, reason } = req.body;
+    const { data, error } = await supabase
+      .from('blocked_dates')
+      .insert([{ date, reason: reason || 'Día Bloqueado' }])
+      .select();
+
+    if (error) throw error;
+    return res.status(201).json({ status: 'success', data: data[0] });
+  } catch (error) {
+    console.error('❌ Error al guardar fecha bloqueada:', error);
+    return res.status(500).json({ status: 'error', message: 'Error al bloquear el día' });
+  }
+});
+
+// DELETE: Desbloquear un día
+app.delete('/api/schedules/blocked-dates/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { error } = await supabase.from('blocked_dates').delete().eq('id', Number(id));
+    if (error) throw error;
+    return res.json({ status: 'success' });
+  } catch (error) {
+    return res.status(500).json({ status: 'error', message: 'Error al eliminar el bloqueo' });
+  }
+});
+
+// POST: Bloquear una franja horaria
+app.post('/api/schedules/blocked-slots', async (req, res) => {
+  try {
+    const { day, startTime, endTime, reason } = req.body;
+    const { data, error } = await supabase
+      .from('blocked_slots')
+      .insert([{ day, start_time: startTime, end_time: endTime, reason: reason || 'Pausa' }])
+      .select();
+
+    if (error) throw error;
+    return res.status(201).json({ status: 'success', data: data[0] });
+  } catch (error) {
+    console.error('❌ Error al guardar franja bloqueada:', error);
+    return res.status(500).json({ status: 'error', message: 'Error al bloquear la franja' });
+  }
+});
+
+// DELETE: Desbloquear una franja horaria
+app.delete('/api/schedules/blocked-slots/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { error } = await supabase.from('blocked_slots').delete().eq('id', Number(id));
+    if (error) throw error;
+    return res.json({ status: 'success' });
+  } catch (error) {
+    return res.status(500).json({ status: 'error', message: 'Error al eliminar la franja' });
+  }
+});
+
+// =========================================================================
+// RUTAS PARA GESTIÓN DE SERVICIOS Y PROFESIONALES
+// =========================================================================
+
+// GET: Obtener todos los servicios con sus profesionales asociados
+app.get('/api/services', async (req, res) => {
+  try {
+    const { data: services, error } = await supabase
+      .from('services')
+      .select(`
+        *,
+        service_professionals (
+          professional_id,
+          professionals (id, name)
+        )
+      `)
+      .order('id', { ascending: true });
+
+    if (error) throw error;
+
+    const formattedServices = services.map(s => ({
+      ...s,
+      professionals: s.service_professionals ? s.service_professionals.map(sp => sp.professionals) : []
+    }));
+
+    return res.json({ status: 'success', services: formattedServices });
+  } catch (error) {
+    console.error('❌ Error obteniendo servicios:', error);
+    return res.status(500).json({ status: 'error', message: 'Error interno del servidor' });
+  }
+});
+
+// GET: Obtener la lista completa de profesionales disponibles
+app.get('/api/professionals', async (req, res) => {
+  try {
+    const { data: professionals, error } = await supabase
+      .from('professionals')
+      .select('*')
+      .order('name', { ascending: true });
+
+    if (error) throw error;
+    return res.json({ status: 'success', professionals: professionals || [] });
+  } catch (error) {
+    console.error('❌ Error obteniendo profesionales:', error);
+    return res.status(500).json({ status: 'error', message: 'Error al obtener profesionales' });
+  }
+});
+
+// POST: Crear un nuevo servicio con profesionales asignados
+app.post('/api/services', async (req, res) => {
+  try {
+    const { name, duration, price, deposit, professionalIds } = req.body;
+
+    const { data: newService, error: serviceError } = await supabase
+      .from('services')
+      .insert([{ name, duration: Number(duration), price: Number(price), deposit: Number(deposit) }])
+      .select()
+      .single();
+
+    if (serviceError) throw serviceError;
+
+    if (professionalIds && professionalIds.length > 0) {
+      const relations = professionalIds.map(profId => ({
+        service_id: newService.id,
+        professional_id: Number(profId)
+      }));
+      const { error: relError } = await supabase.from('service_professionals').insert(relations);
+      if (relError) throw relError;
+    }
+
+    return res.status(201).json({ status: 'success', data: newService });
+  } catch (error) {
+    console.error('❌ Error creando servicio:', error);
+    return res.status(500).json({ status: 'error', message: 'Error al crear servicio' });
+  }
+});
+
+// PUT: Actualizar un servicio y sus profesionales asignados
+app.put('/api/services/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, duration, price, deposit, professionalIds } = req.body;
+
+    const { error: updateError } = await supabase
+      .from('services')
+      .update({ name, duration: Number(duration), price: Number(price), deposit: Number(deposit) })
+      .eq('id', Number(id));
+
+    if (updateError) throw updateError;
+
+    // Eliminar las relaciones anteriores y volver a insertar las nuevas
+    await supabase.from('service_professionals').delete().eq('service_id', Number(id));
+
+    if (professionalIds && professionalIds.length > 0) {
+      const relations = professionalIds.map(profId => ({
+        service_id: Number(id),
+        professional_id: Number(profId)
+      }));
+      await supabase.from('service_professionals').insert(relations);
+    }
+
+    return res.json({ status: 'success' });
+  } catch (error) {
+    console.error('❌ Error actualizando servicio:', error);
+    return res.status(500).json({ status: 'error', message: 'Error al actualizar servicio' });
+  }
+});
+
+// DELETE: Eliminar un servicio
+app.delete('/api/services/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { error } = await supabase.from('services').delete().eq('id', Number(id));
+    if (error) throw error;
+    return res.json({ status: 'success' });
+  } catch (error) {
+    console.error('❌ Error eliminando servicio:', error);
+    return res.status(500).json({ status: 'error', message: 'Error al eliminar servicio' });
+  }
+});
+
 // Iniciar servidor
 app.listen(PORT, () => {
   console.log(`🚀 Servidor backend escuchando en puerto ${PORT}`)
