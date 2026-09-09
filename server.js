@@ -510,6 +510,81 @@ app.delete('/api/schedules/blocked-slots/:id', async (req, res) => {
   }
 });
 
+// =========================================================================
+// RUTA NUEVA: Generar/Obtener enlace de pago para un turno existente
+// =========================================================================
+app.post('/api/appointments/:id/pay', async (req, res) => {
+  try {
+    const { id } = req.params
+
+    // 1. Buscar la cita y sus datos en Supabase
+    const { data: appointment, error: appError } = await supabase
+      .from('appointments')
+      .select('*, services(*)')
+      .eq('id', Number(id))
+      .single()
+
+    if (appError || !appointment) {
+      return res.status(404).json({ status: 'error', message: 'Turno no encontrado' })
+    }
+
+    if (appointment.status === 'confirmed' || appointment.status === 'approved') {
+      return res.status(400).json({ status: 'error', message: 'El turno ya se encuentra pagado' })
+    }
+
+    // 2. Si ya tiene un payment_url guardado, lo devolvemos directamente
+    if (appointment.payment_url) {
+      return res.json({ status: 'success', init_point: appointment.payment_url })
+    }
+
+    // 3. Si no tenía link, generamos una nueva preferencia en Mercado Pago
+    if (!mpAccessToken) {
+      return res.status(500).json({ status: 'error', message: 'Servicio de pago no configurado' })
+    }
+
+    const clientUrl = process.env.CLIENT_URL || 'https://agenda-estetica-fronend-xunf.vercel.app'
+    const backendUrl = process.env.BACKEND_URL || 'https://agenda-estetica-backend.onrender.com'
+
+    // Obtener precio de la seña (del servicio o valor por defecto)
+    const depositAmount = Number(appointment.services?.deposit_amount || appointment.services?.deposit || 0)
+
+    const preference = new Preference(client)
+    const preferenceBody = {
+      items: [
+        {
+          id: String(appointment.service_id),
+          title: `Seña: ${appointment.service_name || 'Servicio Estético'}`,
+          unit_price: depositAmount,
+          quantity: 1,
+          currency_id: 'ARS'
+        }
+      ],
+      external_reference: appointment.id.toString(),
+      back_urls: {
+        success: `${clientUrl}/reserva-exito?appointment_id=${appointment.id}`,
+        failure: `${clientUrl}/reserva-exito?appointment_id=${appointment.id}&status=failed`,
+        pending: `${clientUrl}/reserva-exito?appointment_id=${appointment.id}&status=pending`
+      },
+      auto_return: 'approved',
+      notification_url: `${backendUrl}/api/webhooks/mercadopago`
+    }
+
+    const result = await preference.create({ body: preferenceBody })
+    const newPaymentUrl = result.init_point || result.sandbox_init_point || ''
+
+    // 4. Actualizamos el payment_url en Supabase para futuras consultas
+    await supabase
+      .from('appointments')
+      .update({ payment_url: newPaymentUrl })
+      .eq('id', appointment.id)
+
+    return res.json({ status: 'success', init_point: newPaymentUrl })
+  } catch (error) {
+    console.error('❌ Error generando preferencia de pago:', error)
+    return res.status(500).json({ status: 'error', message: 'Error interno del servidor al procesar el pago' })
+  }
+})
+
 // Iniciar servidor
 app.listen(PORT, () => {
   console.log(`🚀 Servidor backend escuchando en puerto ${PORT}`)
